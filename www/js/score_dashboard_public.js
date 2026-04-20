@@ -1048,7 +1048,15 @@ let globalPublicScoreDashboardObserver = null;
                         state.employeeError = 'No salesperson data available for this medium.';
                     } else {
                         state.employeeError = null;
-                        buildLeadsChartData();
+                        buildConversionChartData();
+                    }
+                } else if (scoreNameLower === 'customer retention') {
+                    state.employeeData = empData.overview_employee || [];
+                    if (!state.employeeData.length) {
+                        state.employeeError = 'No question data available for this department.';
+                    } else {
+                        state.employeeError = null;
+                        buildCustomerRetentionChartData();
                     }
                 } else if (scoreNameLower === 'income' || scoreNameLower === 'expense') {
                     state.employeeData = empData.overview_category || empData.overview_product || [];
@@ -1056,7 +1064,15 @@ let globalPublicScoreDashboardObserver = null;
                         state.employeeError = 'No category data available for this department.';
                     } else {
                         state.employeeError = null;
-                        buildGenericEmployeeChartData();
+                        buildIncomeChartData();
+                    }
+                } else if (scoreNameLower === 'aov') {
+                    state.employeeData = empData.overview_employee || [];
+                    if (!state.employeeData.length) {
+                        state.employeeError = 'No car brand data available for this department.';
+                    } else {
+                        state.employeeError = null;
+                        buildEmployeeChartData();
                     }
                 } else {
                     state.employeeData = empData.overview_employee || [];
@@ -1285,6 +1301,187 @@ let globalPublicScoreDashboardObserver = null;
         };
     }
 
+    function buildConversionChartData() {
+        if (!state.employeeData || state.employeeData.length === 0) {
+            state.employeeChartData = { labels: [], values: [], conversionValues: [] };
+            return;
+        }
+
+        let selectedPeriodData = null;
+        if (state.selectedPeriodInfo && (state.selectedPeriodInfo.startDate || state.selectedPeriodInfo.endDate || state.selectedPeriodInfo.period)) {
+            const periodStart = String(state.selectedPeriodInfo.startDate || '').trim();
+            const periodEnd = String(state.selectedPeriodInfo.endDate || '').trim();
+            const periodLabel = String(state.selectedPeriodInfo.period || '').trim();
+
+            const normalizeDate = (dateStr) => dateStr ? String(dateStr).trim() : null;
+            const normalizedStart = normalizeDate(periodStart);
+            const normalizedEnd = normalizeDate(periodEnd);
+
+            selectedPeriodData = state.employeeData.find(period => {
+                const periodStartNorm = normalizeDate(period.start_date);
+                const periodEndNorm = normalizeDate(period.end_date);
+                return normalizedStart && normalizedEnd && periodStartNorm && periodEndNorm &&
+                    periodStartNorm === normalizedStart && periodEndNorm === normalizedEnd;
+            });
+
+            if (!selectedPeriodData && normalizedStart) {
+                selectedPeriodData = state.employeeData.find(period => normalizeDate(period.start_date) === normalizedStart);
+            }
+
+            if (!selectedPeriodData && periodLabel) {
+                selectedPeriodData = state.employeeData.find(period => String(period.period || '').trim() === periodLabel);
+            }
+        }
+
+        if (!selectedPeriodData) {
+            state.employeeChartData = { labels: [], values: [], conversionValues: [] };
+            return;
+        }
+
+        const salespersons = [];
+        if (selectedPeriodData.sources && Array.isArray(selectedPeriodData.sources)) {
+            selectedPeriodData.sources.forEach(salesperson => {
+                salespersons.push({
+                    name: salesperson.saleperson_name || salesperson.source_name || 'N/A',
+                    qualityLeadValue: Number(salesperson.quality_lead_value || 0),
+                    convertedValue: Number(salesperson.converted_value || 0)
+                });
+            });
+        }
+
+        salespersons.sort((a, b) => b.qualityLeadValue - a.qualityLeadValue);
+
+        state.employeeChartData = {
+            labels: salespersons.map(s => s.name),
+            values: salespersons.map(s => s.qualityLeadValue),
+            conversionValues: salespersons.map(s => s.convertedValue)
+        };
+    }
+
+    function buildCustomerRetentionChartData() {
+        if (!state.employeeData || state.employeeData.length === 0) {
+            state.employeeChartData = { labels: [], values: [] };
+            return;
+        }
+
+        let selectedPeriodData = null;
+        if (state.selectedPeriodInfo && (state.selectedPeriodInfo.startDate || state.selectedPeriodInfo.endDate || state.selectedPeriodInfo.period)) {
+            const periodStart = String(state.selectedPeriodInfo.startDate || '').trim();
+            const periodEnd = String(state.selectedPeriodInfo.endDate || '').trim();
+            const periodLabel = String(state.selectedPeriodInfo.period || '').trim();
+
+            const normalizeDate = (dateStr) => dateStr ? String(dateStr).trim() : null;
+            const normalizedStart = normalizeDate(periodStart);
+            const normalizedEnd = normalizeDate(periodEnd);
+
+            selectedPeriodData = state.employeeData.find(period => {
+                const periodStartNorm = normalizeDate(period.start_date);
+                const periodEndNorm = normalizeDate(period.end_date);
+                return normalizedStart && normalizedEnd && periodStartNorm && periodEndNorm &&
+                    periodStartNorm === normalizedStart && periodEndNorm === normalizedEnd;
+            });
+
+            if (!selectedPeriodData && normalizedStart) {
+                selectedPeriodData = state.employeeData.find(period => normalizeDate(period.start_date) === normalizedStart);
+            }
+
+            if (!selectedPeriodData && periodLabel) {
+                selectedPeriodData = state.employeeData.find(period => String(period.period || '').trim() === periodLabel);
+            }
+        }
+
+        if (!selectedPeriodData) {
+            state.employeeChartData = { labels: [], values: [] };
+            return;
+        }
+
+        const questions = [];
+        if (selectedPeriodData.questions && Array.isArray(selectedPeriodData.questions)) {
+            selectedPeriodData.questions.forEach(question => {
+                if (question.actual_value !== '' && question.actual_value !== null && question.actual_value !== undefined) {
+                    questions.push({
+                        label: question.question || question.question_name || 'N/A',
+                        value: Number(question.actual_value || 0)
+                    });
+                }
+            });
+        }
+
+        questions.sort((a, b) => b.value - a.value);
+        state.employeeChartData = {
+            labels: questions.map(q => q.label),
+            values: questions.map(q => q.value)
+        };
+    }
+
+    function buildIncomeChartData() {
+        if (!state.employeeData || state.employeeData.length === 0) {
+            state.employeeChartData = { labels: [], values: [] };
+            return;
+        }
+
+        let selectedPeriodData = null;
+        if (state.selectedPeriodInfo && (state.selectedPeriodInfo.startDate || state.selectedPeriodInfo.endDate || state.selectedPeriodInfo.period)) {
+            const periodStart = String(state.selectedPeriodInfo.startDate || '').trim();
+            const periodEnd = String(state.selectedPeriodInfo.endDate || '').trim();
+            const periodLabel = String(state.selectedPeriodInfo.period || '').trim();
+
+            const normalizeDate = (dateStr) => dateStr ? String(dateStr).trim() : null;
+            const normalizedStart = normalizeDate(periodStart);
+            const normalizedEnd = normalizeDate(periodEnd);
+
+            selectedPeriodData = state.employeeData.find(period => {
+                const periodStartNorm = normalizeDate(period.start_date);
+                const periodEndNorm = normalizeDate(period.end_date);
+                return normalizedStart && normalizedEnd && periodStartNorm && periodEndNorm &&
+                    periodStartNorm === normalizedStart && periodEndNorm === normalizedEnd;
+            });
+
+            if (!selectedPeriodData && normalizedStart) {
+                selectedPeriodData = state.employeeData.find(period => normalizeDate(period.start_date) === normalizedStart);
+            }
+
+            if (!selectedPeriodData && periodLabel) {
+                selectedPeriodData = state.employeeData.find(period => String(period.period || '').trim() === periodLabel);
+            }
+        }
+
+        if (!selectedPeriodData) {
+            state.employeeChartData = { labels: [], values: [] };
+            return;
+        }
+
+        const items = [];
+        if (selectedPeriodData.categories && Array.isArray(selectedPeriodData.categories)) {
+            selectedPeriodData.categories.forEach(category => {
+                items.push({
+                    label: category.category_name || 'N/A',
+                    value: Number(category.actual_value || 0)
+                });
+            });
+        } else if (selectedPeriodData.products && Array.isArray(selectedPeriodData.products)) {
+            selectedPeriodData.products.forEach(product => {
+                items.push({
+                    label: product.product_name || product.category_name || 'N/A',
+                    value: Number(product.actual_value || 0)
+                });
+            });
+        } else if (selectedPeriodData.employees && Array.isArray(selectedPeriodData.employees)) {
+            selectedPeriodData.employees.forEach(item => {
+                items.push({
+                    label: item.employee_name || item.product_name || item.category_name || 'N/A',
+                    value: Number(item.actual_value || 0)
+                });
+            });
+        }
+
+        items.sort((a, b) => b.value - a.value);
+        state.employeeChartData = {
+            labels: items.map(i => i.label),
+            values: items.map(i => i.value)
+        };
+    }
+
     function buildGenericEmployeeChartData() {
         if (!state.employeeData || state.employeeData.length === 0) {
             state.employeeChartData = null;
@@ -1385,13 +1582,14 @@ let globalPublicScoreDashboardObserver = null;
 
             const scoreNameLower = (state.scoreName || '').toLowerCase();
             const isLeadsScore = scoreNameLower === 'leads';
+            const isConversionScore = scoreNameLower === 'conversion';
             const isLabourScore = scoreNameLower === 'labour';
 
             const datasets = [];
             
-            if (isLeadsScore) {
+            if (isLeadsScore || isConversionScore) {
                 datasets.push({
-                    label: 'Leads',
+                    label: isConversionScore ? 'Quality Leads' : 'Leads',
                     data: state.employeeChartData.values,
                     backgroundColor: '#0d6efd',
                     borderColor: '#0d6efd',
@@ -1401,7 +1599,7 @@ let globalPublicScoreDashboardObserver = null;
                 
                 if (state.employeeChartData.conversionValues && Array.isArray(state.employeeChartData.conversionValues)) {
                     datasets.push({
-                        label: 'Quality Leads',
+                        label: isConversionScore ? 'Converted' : 'Quality Leads',
                         data: state.employeeChartData.conversionValues,
                         backgroundColor: '#198754',
                         borderColor: '#198754',
@@ -1440,7 +1638,7 @@ let globalPublicScoreDashboardObserver = null;
                     responsive: true,
                     plugins: {
                         legend: {
-                            display: isLeadsScore,
+                            display: isLeadsScore || isConversionScore,
                             position: 'top',
                             align: 'end',
                             labels: {
