@@ -1,0 +1,14 @@
+{
+  "appId": "com.bizdom.app",
+  "appName": "bizdom_mobile_app",
+  "webDir": "www",
+  "server": {
+    "cleartext": true,
+    "allowNavigation": [
+      "13.233.223.127"
+    ]
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}
