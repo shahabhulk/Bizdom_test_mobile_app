@@ -541,6 +541,17 @@ let globalPublicScoreDashboardObserver = null;
         if (actual >= maxVal - tolerance) return '#198754';
         return '#ffc107';
     }
+
+    function supportsQuadrant3(scoreName) {
+        const normalized = (scoreName || '').toLowerCase().trim();
+        return normalized === 'labour' ||
+            normalized === 'leads' ||
+            normalized === 'conversion' ||
+            normalized === 'customer retention' ||
+            normalized === 'income' ||
+            normalized === 'expense' ||
+            normalized === 'aov';
+    }
     
     function updateDepartmentChartState(entry, fallbackPeriod) {
         if (!entry || !entry.department || entry.department.length === 0) {
@@ -931,14 +942,36 @@ let globalPublicScoreDashboardObserver = null;
         
         updateDepartmentChartState(matchingEntry, fallbackPeriod);
         renderDepartmentChart();
+
+        if (supportsQuadrant3(state.scoreName)) {
+            setTimeout(async () => {
+                const firstDept = state.departmentChartData?.departments?.[0];
+                if (!firstDept) {
+                    return;
+                }
+                const departmentId = firstDept.department_id;
+                const departmentName = firstDept.department_name || state.departmentChartData.labels?.[0] || '';
+                if (!departmentId) {
+                    return;
+                }
+                const periodInfo = {
+                    startDate: periodItem.start_date || matchingEntry.start_date,
+                    endDate: periodItem.end_date || matchingEntry.end_date,
+                    period: periodItem.period || matchingEntry.period
+                };
+                await handleDepartmentClick(departmentId, departmentName, periodInfo);
+            }, 150);
+        } else {
+            resetEmployeeState();
+        }
     }
     
     async function handleDepartmentClick(departmentId, departmentName, periodInfo = null) {
         const scoreNameLower = (state.scoreName || '').toLowerCase();
         
-        // Handle for Labour and Leads scores
-        if (scoreNameLower !== 'labour' && scoreNameLower !== 'leads') {
-            console.log('Employee/Source overview only available for Labour and Leads scores');
+        // Handle only for score types that have Level-3 breakdown
+        if (!supportsQuadrant3(scoreNameLower)) {
+            console.log('Employee/Source overview is not available for this score type');
             return;
         }
 
@@ -1009,13 +1042,29 @@ let globalPublicScoreDashboardObserver = null;
                         state.employeeError = null;
                         buildLeadsChartData();
                     }
+                } else if (scoreNameLower === 'conversion') {
+                    state.employeeData = empData.overview_source || [];
+                    if (!state.employeeData.length) {
+                        state.employeeError = 'No salesperson data available for this medium.';
+                    } else {
+                        state.employeeError = null;
+                        buildLeadsChartData();
+                    }
+                } else if (scoreNameLower === 'income' || scoreNameLower === 'expense') {
+                    state.employeeData = empData.overview_category || empData.overview_product || [];
+                    if (!state.employeeData.length) {
+                        state.employeeError = 'No category data available for this department.';
+                    } else {
+                        state.employeeError = null;
+                        buildGenericEmployeeChartData();
+                    }
                 } else {
                     state.employeeData = empData.overview_employee || [];
                     if (!state.employeeData.length) {
                         state.employeeError = 'No employee data available for this department.';
                     } else {
                         state.employeeError = null;
-                        buildEmployeeChartData();
+                        buildGenericEmployeeChartData();
                     }
                 }
             } else {
@@ -1235,6 +1284,71 @@ let globalPublicScoreDashboardObserver = null;
             conversionValues: sources.map(s => s.quality_lead_value)
         };
     }
+
+    function buildGenericEmployeeChartData() {
+        if (!state.employeeData || state.employeeData.length === 0) {
+            state.employeeChartData = null;
+            return;
+        }
+
+        let selectedPeriodData = null;
+        if (state.selectedPeriodInfo && (state.selectedPeriodInfo.startDate || state.selectedPeriodInfo.endDate || state.selectedPeriodInfo.period)) {
+            const periodStart = String(state.selectedPeriodInfo.startDate || '').trim();
+            const periodEnd = String(state.selectedPeriodInfo.endDate || '').trim();
+            const periodLabel = String(state.selectedPeriodInfo.period || '').trim();
+
+            const normalizeDate = (dateStr) => {
+                if (!dateStr) return null;
+                return String(dateStr).trim();
+            };
+
+            const normalizedStart = normalizeDate(periodStart);
+            const normalizedEnd = normalizeDate(periodEnd);
+
+            selectedPeriodData = state.employeeData.find(period => {
+                const periodStartNorm = normalizeDate(period.start_date);
+                const periodEndNorm = normalizeDate(period.end_date);
+                return normalizedStart && normalizedEnd && periodStartNorm && periodEndNorm &&
+                    periodStartNorm === normalizedStart && periodEndNorm === normalizedEnd;
+            });
+
+            if (!selectedPeriodData && normalizedStart) {
+                selectedPeriodData = state.employeeData.find(period => normalizeDate(period.start_date) === normalizedStart);
+            }
+
+            if (!selectedPeriodData && periodLabel) {
+                selectedPeriodData = state.employeeData.find(period => String(period.period || '').trim() === periodLabel);
+            }
+        }
+
+        if (!selectedPeriodData) {
+            state.employeeChartData = { labels: [], values: [] };
+            return;
+        }
+
+        const rawItems =
+            (Array.isArray(selectedPeriodData.employees) && selectedPeriodData.employees) ||
+            (Array.isArray(selectedPeriodData.sources) && selectedPeriodData.sources) ||
+            (Array.isArray(selectedPeriodData.categories) && selectedPeriodData.categories) ||
+            (Array.isArray(selectedPeriodData.products) && selectedPeriodData.products) ||
+            (Array.isArray(selectedPeriodData.questions) && selectedPeriodData.questions) ||
+            [];
+
+        const normalizedItems = rawItems.map(item => ({
+            label: item.employee_name || item.source_name || item.category_name || item.product_name || item.question_name || item.name || item.label || 'N/A',
+            value: Number(item.actual_value ?? item.lead_value ?? item.value ?? 0),
+            quality: Number(item.quality_lead_value ?? item.quality_lead ?? 0)
+        }));
+
+        normalizedItems.sort((a, b) => b.value - a.value);
+
+        const hasQualityValues = normalizedItems.some(item => item.quality > 0);
+        state.employeeChartData = {
+            labels: normalizedItems.map(item => item.label),
+            values: normalizedItems.map(item => item.value),
+            conversionValues: hasQualityValues ? normalizedItems.map(item => item.quality) : null
+        };
+    }
     
     function renderEmployeeChart() {
         try {
@@ -1447,6 +1561,12 @@ let globalPublicScoreDashboardObserver = null;
             return 'Select a department in the Department Breakdown to view employee labour.';
         } else if (scoreNameLower === 'leads') {
             return 'Select a medium in the Department Breakdown to view leads by source.';
+        } else if (scoreNameLower === 'conversion') {
+            return 'Select a medium in the Department Breakdown to view conversions by salesperson.';
+        } else if (scoreNameLower === 'income' || scoreNameLower === 'expense') {
+            return 'Select a department in the Department Breakdown to view category breakdown.';
+        } else if (scoreNameLower === 'aov') {
+            return 'Select a department in the Department Breakdown to view AOV by car brand.';
         }
         return 'Select a department/medium in the Department Breakdown to view details.';
     }
@@ -2383,12 +2503,15 @@ let globalPublicScoreDashboardObserver = null;
                                             const scoreNameLower = (state.scoreName || '').toLowerCase();
                                             if (scoreNameLower === 'labour') return 'Employee Labour';
                                             if (scoreNameLower === 'leads') return 'Leads by Source';
+                                            if (scoreNameLower === 'conversion') return 'Conversions by Salesperson';
+                                            if (scoreNameLower === 'income' || scoreNameLower === 'expense') return 'Category Breakdown';
+                                            if (scoreNameLower === 'aov') return 'AOV by Car Brand';
                                             return state.quadrants.q3.title;
                                         })()}
                                     </h5>
                                     ${(() => {
                                         const scoreNameLower = (state.scoreName || '').toLowerCase();
-                                        if (scoreNameLower === 'labour' || scoreNameLower === 'leads') {
+                                        if (supportsQuadrant3(scoreNameLower)) {
                                             return `<small class="text-dark-50">${state.employeeChartLabel || ''}</small>`;
                                         }
                                         return '';
@@ -2398,7 +2521,7 @@ let globalPublicScoreDashboardObserver = null;
                             <div class="card-body">
                                 ${(() => {
                                     const scoreNameLower = (state.scoreName || '').toLowerCase();
-                                    if (scoreNameLower === 'labour' || scoreNameLower === 'leads') {
+                                    if (supportsQuadrant3(scoreNameLower)) {
                                         return `
                                             <div id="employee-chart-placeholder" class="text-muted text-center p-4">
                                                 ${getEmployeePlaceholderMessage()}
