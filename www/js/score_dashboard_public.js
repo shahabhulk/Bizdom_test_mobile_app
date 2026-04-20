@@ -1213,16 +1213,37 @@ let globalPublicScoreDashboardObserver = null;
                 employees.push({
                     employee_id: emp.employee_id,
                     employee_name: emp.employee_name || 'N/A',
-                    actual_value: Number(emp.actual_value || 0)
+                    actual_value: Number(emp.actual_value || 0),
+                    min_value: emp.min_value,
+                    max_value: emp.max_value
                 });
             });
         }
 
         employees.sort((a, b) => b.actual_value - a.actual_value);
 
+        const sharedMinRaw = selectedPeriodData.min_value;
+        const sharedMaxRaw = selectedPeriodData.max_value;
+        const sharedMin = (sharedMinRaw === '' || sharedMinRaw === null || sharedMinRaw === undefined) ? null : Number(sharedMinRaw);
+        const sharedMax = (sharedMaxRaw === '' || sharedMaxRaw === null || sharedMaxRaw === undefined) ? null : Number(sharedMaxRaw);
+
         state.employeeChartData = {
             labels: employees.map(emp => emp.employee_name),
-            values: employees.map(emp => emp.actual_value)
+            values: employees.map(emp => emp.actual_value),
+            minValues: employees.map(emp => {
+                const minVal = emp.min_value;
+                if (minVal === '' || minVal === null || minVal === undefined) return null;
+                const parsed = Number(minVal);
+                return Number.isFinite(parsed) ? parsed : null;
+            }),
+            maxValues: employees.map(emp => {
+                const maxVal = emp.max_value;
+                if (maxVal === '' || maxVal === null || maxVal === undefined) return null;
+                const parsed = Number(maxVal);
+                return Number.isFinite(parsed) ? parsed : null;
+            }),
+            sharedMin: Number.isFinite(sharedMin) ? sharedMin : null,
+            sharedMax: Number.isFinite(sharedMax) ? sharedMax : null
         };
     }
     
@@ -1287,17 +1308,38 @@ let globalPublicScoreDashboardObserver = null;
                     source_id: source.source_id,
                     source_name: source.source_name || 'N/A',
                     lead_value: Number(source.lead_value || 0),
-                    quality_lead_value: Number(source.quality_lead_value || 0)
+                    quality_lead_value: Number(source.quality_lead_value || 0),
+                    min_value: source.min_value,
+                    max_value: source.max_value
                 });
             });
         }
 
         sources.sort((a, b) => b.lead_value - a.lead_value);
 
+        const sharedMinRaw = selectedPeriodData.min_value;
+        const sharedMaxRaw = selectedPeriodData.max_value;
+        const sharedMin = (sharedMinRaw === '' || sharedMinRaw === null || sharedMinRaw === undefined) ? null : Number(sharedMinRaw);
+        const sharedMax = (sharedMaxRaw === '' || sharedMaxRaw === null || sharedMaxRaw === undefined) ? null : Number(sharedMaxRaw);
+
         state.employeeChartData = {
             labels: sources.map(s => s.source_name),
             values: sources.map(s => s.lead_value),
-            conversionValues: sources.map(s => s.quality_lead_value)
+            conversionValues: sources.map(s => s.quality_lead_value),
+            minValues: sources.map(source => {
+                const minVal = source.min_value;
+                if (minVal === '' || minVal === null || minVal === undefined) return null;
+                const parsed = Number(minVal);
+                return Number.isFinite(parsed) ? parsed : null;
+            }),
+            maxValues: sources.map(source => {
+                const maxVal = source.max_value;
+                if (maxVal === '' || maxVal === null || maxVal === undefined) return null;
+                const parsed = Number(maxVal);
+                return Number.isFinite(parsed) ? parsed : null;
+            }),
+            sharedMin: Number.isFinite(sharedMin) ? sharedMin : null,
+            sharedMax: Number.isFinite(sharedMax) ? sharedMax : null
         };
     }
 
@@ -1584,6 +1626,24 @@ let globalPublicScoreDashboardObserver = null;
             const isLeadsScore = scoreNameLower === 'leads';
             const isConversionScore = scoreNameLower === 'conversion';
             const isLabourScore = scoreNameLower === 'labour';
+            const isLowerBetter = isLowerBetterScore(scoreNameLower);
+            const thresholdMinValues = Array.isArray(state.employeeChartData.minValues) ? state.employeeChartData.minValues : null;
+            const thresholdMaxValues = Array.isArray(state.employeeChartData.maxValues) ? state.employeeChartData.maxValues : null;
+            const sharedMin = Number.isFinite(state.employeeChartData.sharedMin) ? state.employeeChartData.sharedMin : null;
+            const sharedMax = Number.isFinite(state.employeeChartData.sharedMax) ? state.employeeChartData.sharedMax : null;
+            const hasSharedThresholds = sharedMin !== null && sharedMax !== null && !(sharedMin === 0 && sharedMax === 0);
+
+            const primaryColors = state.employeeChartData.values.map((actualValue, index) => {
+                const perBarMin = thresholdMinValues && Number.isFinite(thresholdMinValues[index]) ? thresholdMinValues[index] : null;
+                const perBarMax = thresholdMaxValues && Number.isFinite(thresholdMaxValues[index]) ? thresholdMaxValues[index] : null;
+                const minThreshold = perBarMin !== null ? perBarMin : (hasSharedThresholds ? sharedMin : null);
+                const maxThreshold = perBarMax !== null ? perBarMax : (hasSharedThresholds ? sharedMax : null);
+
+                if (!Number.isFinite(minThreshold) || !Number.isFinite(maxThreshold)) {
+                    return '#0d6efd';
+                }
+                return getThresholdColor(actualValue, minThreshold, maxThreshold, isLowerBetter);
+            });
 
             const datasets = [];
             
@@ -1591,8 +1651,8 @@ let globalPublicScoreDashboardObserver = null;
                 datasets.push({
                     label: isConversionScore ? 'Quality Leads' : 'Leads',
                     data: state.employeeChartData.values,
-                    backgroundColor: '#0d6efd',
-                    borderColor: '#0d6efd',
+                    backgroundColor: primaryColors,
+                    borderColor: primaryColors,
                     borderWidth: 1,
                     borderRadius: 4
                 });
@@ -1611,8 +1671,8 @@ let globalPublicScoreDashboardObserver = null;
                 datasets.push({
                     label: 'Labour',
                     data: state.employeeChartData.values,
-                    backgroundColor: '#0d6efd',
-                    borderColor: '#0d6efd',
+                    backgroundColor: primaryColors,
+                    borderColor: primaryColors,
                     borderWidth: 1,
                     borderRadius: 4
                 });
