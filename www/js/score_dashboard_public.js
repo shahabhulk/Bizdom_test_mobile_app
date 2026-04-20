@@ -499,6 +499,8 @@ let globalPublicScoreDashboardObserver = null;
         return {
             labels: departments.map(dep => dep.department_name || dep.department_id || 'Department'),
             values: departments.map(dep => Number(dep.actual_value || 0)),
+            minValues: departments.map(dep => Number(dep.min_value || 0)),
+            maxValues: departments.map(dep => Number(dep.max_value || 0)),
             conversionValues: (isLeadsScore || isConversionScore) && hasConversionValues ? departments.map(dep => {
                 const convValue = dep.quality_lead;
                 if (typeof convValue === 'string') {
@@ -512,6 +514,43 @@ let globalPublicScoreDashboardObserver = null;
             periodEndDate: entry?.end_date,
             period: entry?.period
         };
+    }
+
+    function isLowerBetterScore(scoreName) {
+        const normalized = (scoreName || '').toLowerCase().trim();
+        return normalized === 'tat';
+    }
+
+    function getThresholdColor(actualValue, minValue, maxValue, isLowerBetter) {
+        const actual = Number(actualValue || 0);
+        const minVal = Number(minValue || 0);
+        const maxVal = Number(maxValue || 0);
+        const tolerance = 0.01;
+
+        if (!Number.isFinite(minVal) || !Number.isFinite(maxVal) || (minVal === 0 && maxVal === 0)) {
+            return '#0d6efd';
+        }
+
+        if (isLowerBetter) {
+            if (actual <= minVal + tolerance) return '#198754';
+            if (actual > maxVal + tolerance) return '#dc3545';
+            return '#ffc107';
+        }
+
+        if (actual < minVal - tolerance) return '#dc3545';
+        if (actual >= maxVal - tolerance) return '#198754';
+        return '#ffc107';
+    }
+
+    function supportsQuadrant3(scoreName) {
+        const normalized = (scoreName || '').toLowerCase().trim();
+        return normalized === 'labour' ||
+            normalized === 'leads' ||
+            normalized === 'conversion' ||
+            normalized === 'customer retention' ||
+            normalized === 'income' ||
+            normalized === 'expense' ||
+            normalized === 'aov';
     }
     
     function updateDepartmentChartState(entry, fallbackPeriod) {
@@ -589,12 +628,26 @@ let globalPublicScoreDashboardObserver = null;
         const scoreNameLower = (state.scoreName || '').toLowerCase();
         const isLeadsScore = scoreNameLower.includes('lead') && !scoreNameLower.includes('conversion');
         const isConversionScore = scoreNameLower.includes('conversion');
+        const isLowerBetter = isLowerBetterScore(scoreNameLower);
+        const hasMinMaxArrays =
+            Array.isArray(state.departmentChartData.minValues) &&
+            Array.isArray(state.departmentChartData.maxValues) &&
+            state.departmentChartData.minValues.length === state.departmentChartData.values.length &&
+            state.departmentChartData.maxValues.length === state.departmentChartData.values.length;
+        const primaryColors = hasMinMaxArrays
+            ? state.departmentChartData.values.map((actualValue, index) => getThresholdColor(
+                actualValue,
+                state.departmentChartData.minValues[index],
+                state.departmentChartData.maxValues[index],
+                isLowerBetter
+            ))
+            : '#0d6efd';
         
         const datasets = [{
             label: isLeadsScore ? 'Leads' : (isConversionScore ? 'Conversions' : 'Actual'),
             data: state.departmentChartData.values,
-            backgroundColor: '#0d6efd',
-            borderColor: '#0d6efd',
+            backgroundColor: primaryColors,
+            borderColor: primaryColors,
             borderWidth: 1,
             borderRadius: 4
         }];
@@ -889,14 +942,36 @@ let globalPublicScoreDashboardObserver = null;
         
         updateDepartmentChartState(matchingEntry, fallbackPeriod);
         renderDepartmentChart();
+
+        if (supportsQuadrant3(state.scoreName)) {
+            setTimeout(async () => {
+                const firstDept = state.departmentChartData?.departments?.[0];
+                if (!firstDept) {
+                    return;
+                }
+                const departmentId = firstDept.department_id;
+                const departmentName = firstDept.department_name || state.departmentChartData.labels?.[0] || '';
+                if (!departmentId) {
+                    return;
+                }
+                const periodInfo = {
+                    startDate: periodItem.start_date || matchingEntry.start_date,
+                    endDate: periodItem.end_date || matchingEntry.end_date,
+                    period: periodItem.period || matchingEntry.period
+                };
+                await handleDepartmentClick(departmentId, departmentName, periodInfo);
+            }, 150);
+        } else {
+            resetEmployeeState();
+        }
     }
     
     async function handleDepartmentClick(departmentId, departmentName, periodInfo = null) {
         const scoreNameLower = (state.scoreName || '').toLowerCase();
         
-        // Handle for Labour and Leads scores
-        if (scoreNameLower !== 'labour' && scoreNameLower !== 'leads') {
-            console.log('Employee/Source overview only available for Labour and Leads scores');
+        // Handle only for score types that have Level-3 breakdown
+        if (!supportsQuadrant3(scoreNameLower)) {
+            console.log('Employee/Source overview is not available for this score type');
             return;
         }
 
@@ -967,13 +1042,45 @@ let globalPublicScoreDashboardObserver = null;
                         state.employeeError = null;
                         buildLeadsChartData();
                     }
+                } else if (scoreNameLower === 'conversion') {
+                    state.employeeData = empData.overview_source || [];
+                    if (!state.employeeData.length) {
+                        state.employeeError = 'No salesperson data available for this medium.';
+                    } else {
+                        state.employeeError = null;
+                        buildConversionChartData();
+                    }
+                } else if (scoreNameLower === 'customer retention') {
+                    state.employeeData = empData.overview_employee || [];
+                    if (!state.employeeData.length) {
+                        state.employeeError = 'No question data available for this department.';
+                    } else {
+                        state.employeeError = null;
+                        buildCustomerRetentionChartData();
+                    }
+                } else if (scoreNameLower === 'income' || scoreNameLower === 'expense') {
+                    state.employeeData = empData.overview_category || empData.overview_product || [];
+                    if (!state.employeeData.length) {
+                        state.employeeError = 'No category data available for this department.';
+                    } else {
+                        state.employeeError = null;
+                        buildIncomeChartData();
+                    }
+                } else if (scoreNameLower === 'aov') {
+                    state.employeeData = empData.overview_employee || [];
+                    if (!state.employeeData.length) {
+                        state.employeeError = 'No car brand data available for this department.';
+                    } else {
+                        state.employeeError = null;
+                        buildEmployeeChartData();
+                    }
                 } else {
                     state.employeeData = empData.overview_employee || [];
                     if (!state.employeeData.length) {
                         state.employeeError = 'No employee data available for this department.';
                     } else {
                         state.employeeError = null;
-                        buildEmployeeChartData();
+                        buildGenericEmployeeChartData();
                     }
                 }
             } else {
@@ -1106,16 +1213,37 @@ let globalPublicScoreDashboardObserver = null;
                 employees.push({
                     employee_id: emp.employee_id,
                     employee_name: emp.employee_name || 'N/A',
-                    actual_value: Number(emp.actual_value || 0)
+                    actual_value: Number(emp.actual_value || 0),
+                    min_value: emp.min_value,
+                    max_value: emp.max_value
                 });
             });
         }
 
         employees.sort((a, b) => b.actual_value - a.actual_value);
 
+        const sharedMinRaw = selectedPeriodData.min_value;
+        const sharedMaxRaw = selectedPeriodData.max_value;
+        const sharedMin = (sharedMinRaw === '' || sharedMinRaw === null || sharedMinRaw === undefined) ? null : Number(sharedMinRaw);
+        const sharedMax = (sharedMaxRaw === '' || sharedMaxRaw === null || sharedMaxRaw === undefined) ? null : Number(sharedMaxRaw);
+
         state.employeeChartData = {
             labels: employees.map(emp => emp.employee_name),
-            values: employees.map(emp => emp.actual_value)
+            values: employees.map(emp => emp.actual_value),
+            minValues: employees.map(emp => {
+                const minVal = emp.min_value;
+                if (minVal === '' || minVal === null || minVal === undefined) return null;
+                const parsed = Number(minVal);
+                return Number.isFinite(parsed) ? parsed : null;
+            }),
+            maxValues: employees.map(emp => {
+                const maxVal = emp.max_value;
+                if (maxVal === '' || maxVal === null || maxVal === undefined) return null;
+                const parsed = Number(maxVal);
+                return Number.isFinite(parsed) ? parsed : null;
+            }),
+            sharedMin: Number.isFinite(sharedMin) ? sharedMin : null,
+            sharedMax: Number.isFinite(sharedMax) ? sharedMax : null
         };
     }
     
@@ -1180,17 +1308,284 @@ let globalPublicScoreDashboardObserver = null;
                     source_id: source.source_id,
                     source_name: source.source_name || 'N/A',
                     lead_value: Number(source.lead_value || 0),
-                    quality_lead_value: Number(source.quality_lead_value || 0)
+                    quality_lead_value: Number(source.quality_lead_value || 0),
+                    min_value: source.min_value,
+                    max_value: source.max_value
                 });
             });
         }
 
         sources.sort((a, b) => b.lead_value - a.lead_value);
 
+        const sharedMinRaw = selectedPeriodData.min_value;
+        const sharedMaxRaw = selectedPeriodData.max_value;
+        const sharedMin = (sharedMinRaw === '' || sharedMinRaw === null || sharedMinRaw === undefined) ? null : Number(sharedMinRaw);
+        const sharedMax = (sharedMaxRaw === '' || sharedMaxRaw === null || sharedMaxRaw === undefined) ? null : Number(sharedMaxRaw);
+
         state.employeeChartData = {
             labels: sources.map(s => s.source_name),
             values: sources.map(s => s.lead_value),
-            conversionValues: sources.map(s => s.quality_lead_value)
+            conversionValues: sources.map(s => s.quality_lead_value),
+            minValues: sources.map(source => {
+                const minVal = source.min_value;
+                if (minVal === '' || minVal === null || minVal === undefined) return null;
+                const parsed = Number(minVal);
+                return Number.isFinite(parsed) ? parsed : null;
+            }),
+            maxValues: sources.map(source => {
+                const maxVal = source.max_value;
+                if (maxVal === '' || maxVal === null || maxVal === undefined) return null;
+                const parsed = Number(maxVal);
+                return Number.isFinite(parsed) ? parsed : null;
+            }),
+            sharedMin: Number.isFinite(sharedMin) ? sharedMin : null,
+            sharedMax: Number.isFinite(sharedMax) ? sharedMax : null
+        };
+    }
+
+    function buildConversionChartData() {
+        if (!state.employeeData || state.employeeData.length === 0) {
+            state.employeeChartData = { labels: [], values: [], conversionValues: [] };
+            return;
+        }
+
+        let selectedPeriodData = null;
+        if (state.selectedPeriodInfo && (state.selectedPeriodInfo.startDate || state.selectedPeriodInfo.endDate || state.selectedPeriodInfo.period)) {
+            const periodStart = String(state.selectedPeriodInfo.startDate || '').trim();
+            const periodEnd = String(state.selectedPeriodInfo.endDate || '').trim();
+            const periodLabel = String(state.selectedPeriodInfo.period || '').trim();
+
+            const normalizeDate = (dateStr) => dateStr ? String(dateStr).trim() : null;
+            const normalizedStart = normalizeDate(periodStart);
+            const normalizedEnd = normalizeDate(periodEnd);
+
+            selectedPeriodData = state.employeeData.find(period => {
+                const periodStartNorm = normalizeDate(period.start_date);
+                const periodEndNorm = normalizeDate(period.end_date);
+                return normalizedStart && normalizedEnd && periodStartNorm && periodEndNorm &&
+                    periodStartNorm === normalizedStart && periodEndNorm === normalizedEnd;
+            });
+
+            if (!selectedPeriodData && normalizedStart) {
+                selectedPeriodData = state.employeeData.find(period => normalizeDate(period.start_date) === normalizedStart);
+            }
+
+            if (!selectedPeriodData && periodLabel) {
+                selectedPeriodData = state.employeeData.find(period => String(period.period || '').trim() === periodLabel);
+            }
+        }
+
+        if (!selectedPeriodData) {
+            state.employeeChartData = { labels: [], values: [], conversionValues: [] };
+            return;
+        }
+
+        const salespersons = [];
+        if (selectedPeriodData.sources && Array.isArray(selectedPeriodData.sources)) {
+            selectedPeriodData.sources.forEach(salesperson => {
+                salespersons.push({
+                    name: salesperson.saleperson_name || salesperson.source_name || 'N/A',
+                    qualityLeadValue: Number(salesperson.quality_lead_value || 0),
+                    convertedValue: Number(salesperson.converted_value || 0)
+                });
+            });
+        }
+
+        salespersons.sort((a, b) => b.qualityLeadValue - a.qualityLeadValue);
+
+        state.employeeChartData = {
+            labels: salespersons.map(s => s.name),
+            values: salespersons.map(s => s.qualityLeadValue),
+            conversionValues: salespersons.map(s => s.convertedValue)
+        };
+    }
+
+    function buildCustomerRetentionChartData() {
+        if (!state.employeeData || state.employeeData.length === 0) {
+            state.employeeChartData = { labels: [], values: [] };
+            return;
+        }
+
+        let selectedPeriodData = null;
+        if (state.selectedPeriodInfo && (state.selectedPeriodInfo.startDate || state.selectedPeriodInfo.endDate || state.selectedPeriodInfo.period)) {
+            const periodStart = String(state.selectedPeriodInfo.startDate || '').trim();
+            const periodEnd = String(state.selectedPeriodInfo.endDate || '').trim();
+            const periodLabel = String(state.selectedPeriodInfo.period || '').trim();
+
+            const normalizeDate = (dateStr) => dateStr ? String(dateStr).trim() : null;
+            const normalizedStart = normalizeDate(periodStart);
+            const normalizedEnd = normalizeDate(periodEnd);
+
+            selectedPeriodData = state.employeeData.find(period => {
+                const periodStartNorm = normalizeDate(period.start_date);
+                const periodEndNorm = normalizeDate(period.end_date);
+                return normalizedStart && normalizedEnd && periodStartNorm && periodEndNorm &&
+                    periodStartNorm === normalizedStart && periodEndNorm === normalizedEnd;
+            });
+
+            if (!selectedPeriodData && normalizedStart) {
+                selectedPeriodData = state.employeeData.find(period => normalizeDate(period.start_date) === normalizedStart);
+            }
+
+            if (!selectedPeriodData && periodLabel) {
+                selectedPeriodData = state.employeeData.find(period => String(period.period || '').trim() === periodLabel);
+            }
+        }
+
+        if (!selectedPeriodData) {
+            state.employeeChartData = { labels: [], values: [] };
+            return;
+        }
+
+        const questions = [];
+        if (selectedPeriodData.questions && Array.isArray(selectedPeriodData.questions)) {
+            selectedPeriodData.questions.forEach(question => {
+                if (question.actual_value !== '' && question.actual_value !== null && question.actual_value !== undefined) {
+                    questions.push({
+                        label: question.question || question.question_name || 'N/A',
+                        value: Number(question.actual_value || 0)
+                    });
+                }
+            });
+        }
+
+        questions.sort((a, b) => b.value - a.value);
+        state.employeeChartData = {
+            labels: questions.map(q => q.label),
+            values: questions.map(q => q.value)
+        };
+    }
+
+    function buildIncomeChartData() {
+        if (!state.employeeData || state.employeeData.length === 0) {
+            state.employeeChartData = { labels: [], values: [] };
+            return;
+        }
+
+        let selectedPeriodData = null;
+        if (state.selectedPeriodInfo && (state.selectedPeriodInfo.startDate || state.selectedPeriodInfo.endDate || state.selectedPeriodInfo.period)) {
+            const periodStart = String(state.selectedPeriodInfo.startDate || '').trim();
+            const periodEnd = String(state.selectedPeriodInfo.endDate || '').trim();
+            const periodLabel = String(state.selectedPeriodInfo.period || '').trim();
+
+            const normalizeDate = (dateStr) => dateStr ? String(dateStr).trim() : null;
+            const normalizedStart = normalizeDate(periodStart);
+            const normalizedEnd = normalizeDate(periodEnd);
+
+            selectedPeriodData = state.employeeData.find(period => {
+                const periodStartNorm = normalizeDate(period.start_date);
+                const periodEndNorm = normalizeDate(period.end_date);
+                return normalizedStart && normalizedEnd && periodStartNorm && periodEndNorm &&
+                    periodStartNorm === normalizedStart && periodEndNorm === normalizedEnd;
+            });
+
+            if (!selectedPeriodData && normalizedStart) {
+                selectedPeriodData = state.employeeData.find(period => normalizeDate(period.start_date) === normalizedStart);
+            }
+
+            if (!selectedPeriodData && periodLabel) {
+                selectedPeriodData = state.employeeData.find(period => String(period.period || '').trim() === periodLabel);
+            }
+        }
+
+        if (!selectedPeriodData) {
+            state.employeeChartData = { labels: [], values: [] };
+            return;
+        }
+
+        const items = [];
+        if (selectedPeriodData.categories && Array.isArray(selectedPeriodData.categories)) {
+            selectedPeriodData.categories.forEach(category => {
+                items.push({
+                    label: category.category_name || 'N/A',
+                    value: Number(category.actual_value || 0)
+                });
+            });
+        } else if (selectedPeriodData.products && Array.isArray(selectedPeriodData.products)) {
+            selectedPeriodData.products.forEach(product => {
+                items.push({
+                    label: product.product_name || product.category_name || 'N/A',
+                    value: Number(product.actual_value || 0)
+                });
+            });
+        } else if (selectedPeriodData.employees && Array.isArray(selectedPeriodData.employees)) {
+            selectedPeriodData.employees.forEach(item => {
+                items.push({
+                    label: item.employee_name || item.product_name || item.category_name || 'N/A',
+                    value: Number(item.actual_value || 0)
+                });
+            });
+        }
+
+        items.sort((a, b) => b.value - a.value);
+        state.employeeChartData = {
+            labels: items.map(i => i.label),
+            values: items.map(i => i.value)
+        };
+    }
+
+    function buildGenericEmployeeChartData() {
+        if (!state.employeeData || state.employeeData.length === 0) {
+            state.employeeChartData = null;
+            return;
+        }
+
+        let selectedPeriodData = null;
+        if (state.selectedPeriodInfo && (state.selectedPeriodInfo.startDate || state.selectedPeriodInfo.endDate || state.selectedPeriodInfo.period)) {
+            const periodStart = String(state.selectedPeriodInfo.startDate || '').trim();
+            const periodEnd = String(state.selectedPeriodInfo.endDate || '').trim();
+            const periodLabel = String(state.selectedPeriodInfo.period || '').trim();
+
+            const normalizeDate = (dateStr) => {
+                if (!dateStr) return null;
+                return String(dateStr).trim();
+            };
+
+            const normalizedStart = normalizeDate(periodStart);
+            const normalizedEnd = normalizeDate(periodEnd);
+
+            selectedPeriodData = state.employeeData.find(period => {
+                const periodStartNorm = normalizeDate(period.start_date);
+                const periodEndNorm = normalizeDate(period.end_date);
+                return normalizedStart && normalizedEnd && periodStartNorm && periodEndNorm &&
+                    periodStartNorm === normalizedStart && periodEndNorm === normalizedEnd;
+            });
+
+            if (!selectedPeriodData && normalizedStart) {
+                selectedPeriodData = state.employeeData.find(period => normalizeDate(period.start_date) === normalizedStart);
+            }
+
+            if (!selectedPeriodData && periodLabel) {
+                selectedPeriodData = state.employeeData.find(period => String(period.period || '').trim() === periodLabel);
+            }
+        }
+
+        if (!selectedPeriodData) {
+            state.employeeChartData = { labels: [], values: [] };
+            return;
+        }
+
+        const rawItems =
+            (Array.isArray(selectedPeriodData.employees) && selectedPeriodData.employees) ||
+            (Array.isArray(selectedPeriodData.sources) && selectedPeriodData.sources) ||
+            (Array.isArray(selectedPeriodData.categories) && selectedPeriodData.categories) ||
+            (Array.isArray(selectedPeriodData.products) && selectedPeriodData.products) ||
+            (Array.isArray(selectedPeriodData.questions) && selectedPeriodData.questions) ||
+            [];
+
+        const normalizedItems = rawItems.map(item => ({
+            label: item.employee_name || item.source_name || item.category_name || item.product_name || item.question_name || item.name || item.label || 'N/A',
+            value: Number(item.actual_value ?? item.lead_value ?? item.value ?? 0),
+            quality: Number(item.quality_lead_value ?? item.quality_lead ?? 0)
+        }));
+
+        normalizedItems.sort((a, b) => b.value - a.value);
+
+        const hasQualityValues = normalizedItems.some(item => item.quality > 0);
+        state.employeeChartData = {
+            labels: normalizedItems.map(item => item.label),
+            values: normalizedItems.map(item => item.value),
+            conversionValues: hasQualityValues ? normalizedItems.map(item => item.quality) : null
         };
     }
     
@@ -1229,23 +1624,42 @@ let globalPublicScoreDashboardObserver = null;
 
             const scoreNameLower = (state.scoreName || '').toLowerCase();
             const isLeadsScore = scoreNameLower === 'leads';
+            const isConversionScore = scoreNameLower === 'conversion';
             const isLabourScore = scoreNameLower === 'labour';
+            const isLowerBetter = isLowerBetterScore(scoreNameLower);
+            const thresholdMinValues = Array.isArray(state.employeeChartData.minValues) ? state.employeeChartData.minValues : null;
+            const thresholdMaxValues = Array.isArray(state.employeeChartData.maxValues) ? state.employeeChartData.maxValues : null;
+            const sharedMin = Number.isFinite(state.employeeChartData.sharedMin) ? state.employeeChartData.sharedMin : null;
+            const sharedMax = Number.isFinite(state.employeeChartData.sharedMax) ? state.employeeChartData.sharedMax : null;
+            const hasSharedThresholds = sharedMin !== null && sharedMax !== null && !(sharedMin === 0 && sharedMax === 0);
+
+            const primaryColors = state.employeeChartData.values.map((actualValue, index) => {
+                const perBarMin = thresholdMinValues && Number.isFinite(thresholdMinValues[index]) ? thresholdMinValues[index] : null;
+                const perBarMax = thresholdMaxValues && Number.isFinite(thresholdMaxValues[index]) ? thresholdMaxValues[index] : null;
+                const minThreshold = perBarMin !== null ? perBarMin : (hasSharedThresholds ? sharedMin : null);
+                const maxThreshold = perBarMax !== null ? perBarMax : (hasSharedThresholds ? sharedMax : null);
+
+                if (!Number.isFinite(minThreshold) || !Number.isFinite(maxThreshold)) {
+                    return '#0d6efd';
+                }
+                return getThresholdColor(actualValue, minThreshold, maxThreshold, isLowerBetter);
+            });
 
             const datasets = [];
             
-            if (isLeadsScore) {
+            if (isLeadsScore || isConversionScore) {
                 datasets.push({
-                    label: 'Leads',
+                    label: isConversionScore ? 'Quality Leads' : 'Leads',
                     data: state.employeeChartData.values,
-                    backgroundColor: '#0d6efd',
-                    borderColor: '#0d6efd',
+                    backgroundColor: primaryColors,
+                    borderColor: primaryColors,
                     borderWidth: 1,
                     borderRadius: 4
                 });
                 
                 if (state.employeeChartData.conversionValues && Array.isArray(state.employeeChartData.conversionValues)) {
                     datasets.push({
-                        label: 'Quality Leads',
+                        label: isConversionScore ? 'Converted' : 'Quality Leads',
                         data: state.employeeChartData.conversionValues,
                         backgroundColor: '#198754',
                         borderColor: '#198754',
@@ -1257,8 +1671,8 @@ let globalPublicScoreDashboardObserver = null;
                 datasets.push({
                     label: 'Labour',
                     data: state.employeeChartData.values,
-                    backgroundColor: '#0d6efd',
-                    borderColor: '#0d6efd',
+                    backgroundColor: primaryColors,
+                    borderColor: primaryColors,
                     borderWidth: 1,
                     borderRadius: 4
                 });
@@ -1284,7 +1698,7 @@ let globalPublicScoreDashboardObserver = null;
                     responsive: true,
                     plugins: {
                         legend: {
-                            display: isLeadsScore,
+                            display: isLeadsScore || isConversionScore,
                             position: 'top',
                             align: 'end',
                             labels: {
@@ -1405,6 +1819,12 @@ let globalPublicScoreDashboardObserver = null;
             return 'Select a department in the Department Breakdown to view employee labour.';
         } else if (scoreNameLower === 'leads') {
             return 'Select a medium in the Department Breakdown to view leads by source.';
+        } else if (scoreNameLower === 'conversion') {
+            return 'Select a medium in the Department Breakdown to view conversions by salesperson.';
+        } else if (scoreNameLower === 'income' || scoreNameLower === 'expense') {
+            return 'Select a department in the Department Breakdown to view category breakdown.';
+        } else if (scoreNameLower === 'aov') {
+            return 'Select a department in the Department Breakdown to view AOV by car brand.';
         }
         return 'Select a department/medium in the Department Breakdown to view details.';
     }
@@ -1613,6 +2033,13 @@ let globalPublicScoreDashboardObserver = null;
         const scoreNameToCheck = state.scoreName || state.quadrants.q1.score_name || '';
         const isLeadsScore = scoreNameToCheck && scoreNameToCheck.toLowerCase().includes('lead') && !scoreNameToCheck.toLowerCase().includes('conversion');
         const isConversionScore = scoreNameToCheck && scoreNameToCheck.toLowerCase().includes('conversion');
+        const isLowerBetter = isLowerBetterScore(scoreNameToCheck);
+        const primaryColors = data.map(item => getThresholdColor(
+            item.actual_value,
+            item.min_value,
+            item.max_value,
+            isLowerBetter
+        ));
         
         // Check for quality_lead field - for Leads and Conversion scores, show it even if values are 0
         const hasConversionValues = (isLeadsScore || isConversionScore) && data.some(item => {
@@ -1636,8 +2063,8 @@ let globalPublicScoreDashboardObserver = null;
         const datasets = [{
             label: isLeadsScore ? 'Leads' : (isConversionScore ? 'Conversions' : (scoreNameToCheck || 'Total')),
             data: values,
-            backgroundColor: '#0d6efd',
-            borderColor: '#0d6efd',
+            backgroundColor: primaryColors,
+            borderColor: primaryColors,
             borderWidth: 1,
             borderRadius: 4
         }];
@@ -2334,12 +2761,15 @@ let globalPublicScoreDashboardObserver = null;
                                             const scoreNameLower = (state.scoreName || '').toLowerCase();
                                             if (scoreNameLower === 'labour') return 'Employee Labour';
                                             if (scoreNameLower === 'leads') return 'Leads by Source';
+                                            if (scoreNameLower === 'conversion') return 'Conversions by Salesperson';
+                                            if (scoreNameLower === 'income' || scoreNameLower === 'expense') return 'Category Breakdown';
+                                            if (scoreNameLower === 'aov') return 'AOV by Car Brand';
                                             return state.quadrants.q3.title;
                                         })()}
                                     </h5>
                                     ${(() => {
                                         const scoreNameLower = (state.scoreName || '').toLowerCase();
-                                        if (scoreNameLower === 'labour' || scoreNameLower === 'leads') {
+                                        if (supportsQuadrant3(scoreNameLower)) {
                                             return `<small class="text-dark-50">${state.employeeChartLabel || ''}</small>`;
                                         }
                                         return '';
@@ -2349,7 +2779,7 @@ let globalPublicScoreDashboardObserver = null;
                             <div class="card-body">
                                 ${(() => {
                                     const scoreNameLower = (state.scoreName || '').toLowerCase();
-                                    if (scoreNameLower === 'labour' || scoreNameLower === 'leads') {
+                                    if (supportsQuadrant3(scoreNameLower)) {
                                         return `
                                             <div id="employee-chart-placeholder" class="text-muted text-center p-4">
                                                 ${getEmployeePlaceholderMessage()}
