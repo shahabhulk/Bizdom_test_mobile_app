@@ -489,34 +489,28 @@ window.checkEventListeners = function() {
         return `filter: ${style.filter}; text-shadow: ${style.textShadow};`;
     }
     
-    function getScoreColor(scoreName) {
-        // Normalize score name: trim whitespace and handle case-insensitive matching
-        const normalizedName = (scoreName || '').trim();
-        
-        const colorMap = {
-            'Labour': '#ff6b6b',
-            'Customer Satisfaction': '#4ecdc4',
-            'TAT': '#ffe66d',
-            'Leads': '#95e1d3',
-            'Revenue': '#f38181',
-            'Productivity': '#a8e6cf',
-            'Quality': '#ffd93d',
-            'Efficiency': '#6bcf7f',
-        };
-        
-        // Try exact match first
-        if (colorMap[normalizedName]) {
-            return colorMap[normalizedName];
-        }
-        
-        // Try case-insensitive match
-        const lowerName = normalizedName.toLowerCase();
-        for (const [key, value] of Object.entries(colorMap)) {
-            if (key.toLowerCase() === lowerName) {
-                return value;
+    function getScoreOverviewColor(score) {
+        const actual = Number(score.context_total_score ?? score.total_score_value ?? 0);
+        const minVal = Number(score.min_value ?? 0);
+        const maxVal = Number(score.max_value ?? 0);
+        const tolerance = 0.01;
+        const isTATScore = (score.score_name || '').toLowerCase().trim() === 'tat';
+
+        if (minVal > 0 && maxVal > 0) {
+            if (isTATScore) {
+                if (actual <= minVal + tolerance) return '#198754';
+                if (actual > maxVal + tolerance) return '#dc3545';
+                return '#ffc107';
             }
+
+            if (actual < minVal - tolerance) {
+                return '#dc3545';
+            }
+            if (actual >= maxVal - tolerance) {
+                return '#198754';
+            }
+            return '#ffc107';
         }
-        
         return '#95a5a6';
     }
 
@@ -1126,7 +1120,7 @@ window.handleLogin = handleLogin;
         // In Font Awesome 6, icons already include the style prefix (fas, far, etc.)
         // So we don't need to add 'fa' prefix - the icon class is complete
         
-        const color = getScoreColor(score.score_name);
+        const color = getScoreOverviewColor(score);
         const iconStyle = getIconStyle(score.score_name); // Get custom styles for this icon
         const value = (score.total_score_value || 0).toFixed(1);
         const suffix = (score.type === 'percentage') ? '%' : '';

@@ -499,6 +499,8 @@ let globalPublicScoreDashboardObserver = null;
         return {
             labels: departments.map(dep => dep.department_name || dep.department_id || 'Department'),
             values: departments.map(dep => Number(dep.actual_value || 0)),
+            minValues: departments.map(dep => Number(dep.min_value || 0)),
+            maxValues: departments.map(dep => Number(dep.max_value || 0)),
             conversionValues: (isLeadsScore || isConversionScore) && hasConversionValues ? departments.map(dep => {
                 const convValue = dep.quality_lead;
                 if (typeof convValue === 'string') {
@@ -512,6 +514,32 @@ let globalPublicScoreDashboardObserver = null;
             periodEndDate: entry?.end_date,
             period: entry?.period
         };
+    }
+
+    function isLowerBetterScore(scoreName) {
+        const normalized = (scoreName || '').toLowerCase().trim();
+        return normalized === 'tat';
+    }
+
+    function getThresholdColor(actualValue, minValue, maxValue, isLowerBetter) {
+        const actual = Number(actualValue || 0);
+        const minVal = Number(minValue || 0);
+        const maxVal = Number(maxValue || 0);
+        const tolerance = 0.01;
+
+        if (!Number.isFinite(minVal) || !Number.isFinite(maxVal) || (minVal === 0 && maxVal === 0)) {
+            return '#0d6efd';
+        }
+
+        if (isLowerBetter) {
+            if (actual <= minVal + tolerance) return '#198754';
+            if (actual > maxVal + tolerance) return '#dc3545';
+            return '#ffc107';
+        }
+
+        if (actual < minVal - tolerance) return '#dc3545';
+        if (actual >= maxVal - tolerance) return '#198754';
+        return '#ffc107';
     }
     
     function updateDepartmentChartState(entry, fallbackPeriod) {
@@ -589,12 +617,26 @@ let globalPublicScoreDashboardObserver = null;
         const scoreNameLower = (state.scoreName || '').toLowerCase();
         const isLeadsScore = scoreNameLower.includes('lead') && !scoreNameLower.includes('conversion');
         const isConversionScore = scoreNameLower.includes('conversion');
+        const isLowerBetter = isLowerBetterScore(scoreNameLower);
+        const hasMinMaxArrays =
+            Array.isArray(state.departmentChartData.minValues) &&
+            Array.isArray(state.departmentChartData.maxValues) &&
+            state.departmentChartData.minValues.length === state.departmentChartData.values.length &&
+            state.departmentChartData.maxValues.length === state.departmentChartData.values.length;
+        const primaryColors = hasMinMaxArrays
+            ? state.departmentChartData.values.map((actualValue, index) => getThresholdColor(
+                actualValue,
+                state.departmentChartData.minValues[index],
+                state.departmentChartData.maxValues[index],
+                isLowerBetter
+            ))
+            : '#0d6efd';
         
         const datasets = [{
             label: isLeadsScore ? 'Leads' : (isConversionScore ? 'Conversions' : 'Actual'),
             data: state.departmentChartData.values,
-            backgroundColor: '#0d6efd',
-            borderColor: '#0d6efd',
+            backgroundColor: primaryColors,
+            borderColor: primaryColors,
             borderWidth: 1,
             borderRadius: 4
         }];
@@ -1613,6 +1655,13 @@ let globalPublicScoreDashboardObserver = null;
         const scoreNameToCheck = state.scoreName || state.quadrants.q1.score_name || '';
         const isLeadsScore = scoreNameToCheck && scoreNameToCheck.toLowerCase().includes('lead') && !scoreNameToCheck.toLowerCase().includes('conversion');
         const isConversionScore = scoreNameToCheck && scoreNameToCheck.toLowerCase().includes('conversion');
+        const isLowerBetter = isLowerBetterScore(scoreNameToCheck);
+        const primaryColors = data.map(item => getThresholdColor(
+            item.actual_value,
+            item.min_value,
+            item.max_value,
+            isLowerBetter
+        ));
         
         // Check for quality_lead field - for Leads and Conversion scores, show it even if values are 0
         const hasConversionValues = (isLeadsScore || isConversionScore) && data.some(item => {
@@ -1636,8 +1685,8 @@ let globalPublicScoreDashboardObserver = null;
         const datasets = [{
             label: isLeadsScore ? 'Leads' : (isConversionScore ? 'Conversions' : (scoreNameToCheck || 'Total')),
             data: values,
-            backgroundColor: '#0d6efd',
-            borderColor: '#0d6efd',
+            backgroundColor: primaryColors,
+            borderColor: primaryColors,
             borderWidth: 1,
             borderRadius: 4
         }];
